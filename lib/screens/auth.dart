@@ -1,5 +1,12 @@
+import 'dart:io';
+
+import 'package:chatapp/widgets/user_image_picker.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
 
 final _firebaseAuth = FirebaseAuth.instance;
 
@@ -15,31 +22,57 @@ class _AuthScreenState extends State<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   late String _userEmail;
   late String _userPassword;
+  late String _userUserName;
+  XFile? _selectedImage;
+  bool _isUploading = false;
 
   void _submit() async {
     final bool _isValid = _formKey.currentState!.validate();
-    if (!_isValid) {
+    if (!_isValid || !_isLogin && _selectedImage == null) {
       return;
     }
+
     _formKey.currentState!.save();
-    if (_isLogin) {
-      final userCredentials = await _firebaseAuth.signInWithEmailAndPassword(
-          email: _userEmail, password: _userPassword);
-    } else {
-      try {
+    try {
+      setState(() {
+        _isUploading = true;
+      });
+      if (_isLogin) {
+        final userCredentials = await _firebaseAuth.signInWithEmailAndPassword(
+            email: _userEmail, password: _userPassword);
+      } else {
         final userCredentials =
             await _firebaseAuth.createUserWithEmailAndPassword(
                 email: _userEmail, password: _userPassword);
-        print(userCredentials);
-      } on FirebaseAuthException catch (error) {
-        print(error.message);
-        ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(error.message!.split(":")[3].split(".")[0]),
-          ),
-        );
+
+        final storageRef = FirebaseStorage.instance
+            .ref()
+            .child("user_images")
+            .child('${userCredentials.user!.uid}.jpeg');
+
+        await storageRef.putData(await _selectedImage!.readAsBytes());
+        final imageUrl = await storageRef.getDownloadURL();
+
+        await FirebaseFirestore.instance
+            .collection("users")
+            .doc(userCredentials.user!.uid)
+            .set({
+          'username': _userUserName,
+          'email': userCredentials.user!.email,
+          'image_url': imageUrl,
+        });
       }
+    } on FirebaseAuthException catch (error) {
+      print(error.message);
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message!.split(":")[3].split(".")[0]),
+        ),
+      );
+      setState(() {
+        _isUploading = false;
+      });
     }
   }
 
@@ -76,6 +109,12 @@ class _AuthScreenState extends State<AuthScreen> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              if (!_isLogin)
+                                UserImagePicker(
+                                  onPickImage: (pickedImage) {
+                                    _selectedImage = pickedImage;
+                                  },
+                                ),
                               TextFormField(
                                 decoration: const InputDecoration(
                                     label: Text('Email Address')),
@@ -95,6 +134,27 @@ class _AuthScreenState extends State<AuthScreen> {
                                   _userEmail = value!;
                                 },
                               ),
+                              const SizedBox(
+                                height: 12,
+                              ),
+                              if (!_isLogin)
+                                TextFormField(
+                                  decoration: const InputDecoration(
+                                    label: Text("Username"),
+                                  ),
+                                  enableSuggestions: false,
+                                  validator: (value) {
+                                    if (value == null ||
+                                        value.trim().length < 4 ||
+                                        value.isEmpty) {
+                                      return "Invalid Username";
+                                    }
+                                    return null;
+                                  },
+                                  onSaved: (value) {
+                                    _userUserName = value!;
+                                  },
+                                ),
                               TextFormField(
                                 decoration: const InputDecoration(
                                     label: Text('Password')),
@@ -112,24 +172,27 @@ class _AuthScreenState extends State<AuthScreen> {
                                 },
                               ),
                               const SizedBox(height: 12),
-                              ElevatedButton(
-                                onPressed: _submit,
-                                style: ElevatedButton.styleFrom(
-                                    backgroundColor: Theme.of(context)
-                                        .colorScheme
-                                        .primaryContainer),
-                                child: Text(_isLogin ? "Log in" : "Sign Up"),
-                              ),
+                              if (_isUploading) CircularProgressIndicator(),
+                              if (!_isUploading)
+                                ElevatedButton(
+                                  onPressed: _submit,
+                                  style: ElevatedButton.styleFrom(
+                                      backgroundColor: Theme.of(context)
+                                          .colorScheme
+                                          .primaryContainer),
+                                  child: Text(_isLogin ? "Log in" : "Sign Up"),
+                                ),
                               const SizedBox(height: 12),
-                              TextButton(
-                                  onPressed: () {
-                                    setState(() {
-                                      _isLogin = !_isLogin;
-                                    });
-                                  },
-                                  child: Text(_isLogin
-                                      ? "Create an account"
-                                      : "I have an account."))
+                              if (!_isUploading)
+                                TextButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        _isLogin = !_isLogin;
+                                      });
+                                    },
+                                    child: Text(_isLogin
+                                        ? "Create an account"
+                                        : "I have an account."))
                             ],
                           )),
                     ),
